@@ -33,11 +33,18 @@ android {
     namespace "com.peeweesusername.ballbounce"  // ADD THIS—fixes your original error
 
     compileSdkVersion 36
-    ndkVersion flutter.ndkVersion
+    //ndkVersion flutter.ndkVersion
+    ndkVersion "28.0.12433566"
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false  // Ensures uncompressed .so → auto 16KB aligned
+        }
     }
 
     kotlinOptions {

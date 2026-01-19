@@ -1,0 +1,54 @@
+Requirements Summary (as of Jan 2026)
+
+AGP (Android Gradle Plugin): 8.5.1 or higher (auto-aligns uncompressed .so libs to 16 KB during packaging).
+NDK (Native Development Kit): r28 or higher (compiles .so with 16 KB alignment by default).
+Gradle Wrapper: 8.5+ (compatible with AGP 8.5+).
+Flutter: 3.32+ (your 3.38.7 is perfect).
+No code changes needed in most cases — toolchain upgrade handles it.
+
+Step-by-Step: Make ballbounce Support 16 KB Pages
+
+Update AGP to 8.5.1+
+Open android/build.gradle (project-level file):groovybuildscript {
+    // ... existing repositories
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.1'  // Bump from 8.2.2 or whatever you had
+        // Keep your Kotlin classpath (2.2.0 is fine)
+    }
+}If using declarative plugins in android/settings.gradle, update there too:groovyplugins {
+    id "com.android.application" version "8.5.1" apply false
+    // ... other plugins
+}
+Update NDK to r28+
+In android/app/build.gradle (app module), add or update inside android { ... }:groovyandroid {
+    ndkVersion "28.0.12433566"  // Latest r28 as of Jan 2026 – check developer.android.com/ndk/downloads for newer
+    // ... your existing compileSdkVersion 35, etc.
+}(This ensures native libs like libflutter.so from Flame/Forge2D are compiled with 16 KB alignment.)
+Update Gradle Wrapper (if not already 8.5+)
+Open android/gradle/wrapper/gradle-wrapper.properties:textdistributionUrl=https\://services.gradle.org/distributions/gradle-8.5-all.zipOr run in the android/ folder:Bashgradlew wrapper --gradle-version=8.5(Higher like 8.7+ is also fine if stable.)
+(Optional but Recommended) Ensure Uncompressed JNI Libs
+In android/app/build.gradle (inside android { ... }), add:groovypackagingOptions {
+    jniLibs {
+        useLegacyPackaging = false  // Default in AGP 8.5.1+, forces uncompressed → auto 16 KB zip-align
+    }
+}
+Aggressive Full Clean & Rebuild
+Close Android Studio first.Bashflutter clean
+flutter pub cache repair   # Clears old native artifacts
+flutter pub get
+cd android
+gradlew.bat clean
+cd ..
+rmdir /s /q build   # Delete build folder (Windows)
+flutter build appbundle --release
+Verify It Worked (Critical – Google Play Checks This)
+In Android Studio:
+Build → Build Bundle(s)/APK(s) → Build Bundle(s)
+Tools → Analyze App Bundle (or Analyze APK)
+Open your .aab → Navigate to lib/arm64-v8a (or armeabi-v7a) → Check .so files (e.g., libflutter.so)
+Look for "Alignment" or use command-line (in terminal):Bashreadelf -l path/to/your/app-release.aab/lib/arm64-v8a/libflutter.so | findstr LOAD→ Should show alignment 0x4000 (16384 = 16 KB) or higher.
+
+Test on 16 KB Device/Emulator:
+Create AVD (Android 15+ image) → Advanced Settings → Boot with 16 KB page size.
+Or on physical device (Pixel 8+ with Android 15 QPR): Settings → System → Developer options → Enable "Boot with 16KB page size".
+Run your app — no crashes, and adb shell getconf PAGE_SIZE shows 16384.
