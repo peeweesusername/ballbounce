@@ -1,12 +1,11 @@
 buildscript {
-    ext.kotlin_version = '1.6.10'
+    ext.kotlin_version = '2.2.0'  // Latest stable for AGP 8+
     repositories {
         google()
         mavenCentral()
     }
-
     dependencies {
-        classpath 'com.android.tools.build:gradle:7.1.2'
+        classpath 'com.android.tools.build:gradle:8.2.2'  // AGP 8.2+ for API 35
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
     }
 }
@@ -22,10 +21,52 @@ rootProject.buildDir = '../build'
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
 }
+
+// Custom fixes for plugins (namespace, manifest, JVM)
 subprojects {
-    project.evaluationDependsOn(':app')
+    plugins.withId("com.android.library") {
+        android {
+            if (namespace == null || namespace.toString().isEmpty()) {
+                def fallback = project.group?.toString() ?: "com.fallback.${project.name.replace(':', '_')}"
+                namespace fallback
+                println "Applied fallback namespace '${fallback}' to ${project.name}"
+            }
+        }
+    }
+
+    afterEvaluate { proj ->
+        if (proj.hasProperty('android')) {
+            proj.android {
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_1_8
+                    targetCompatibility JavaVersion.VERSION_1_8
+                }
+            }
+            proj.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions.jvmTarget = "1.8"
+            }
+            println "Forced JVM target 1.8 for ${proj.name}"
+
+            // Remove deprecated package= from plugin manifests
+            proj.tasks.whenTaskAdded { task ->
+                if (task.name.contains('process') && task.name.contains('Manifest')) {
+                    task.doFirst {
+                        def manifestFile = proj.android.sourceSets.main.manifest.srcFile
+                        if (manifestFile.exists()) {
+                            def content = manifestFile.text
+                            if (content.contains('package=')) {
+                                content = content.replaceAll('package="[^"]*"', '')
+                                manifestFile.text = content
+                                println "Removed package attr from manifest in ${proj.name}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
-task clean(type: Delete) {
+tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }

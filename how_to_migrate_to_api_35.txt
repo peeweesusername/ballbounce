@@ -1,0 +1,216 @@
+# README: How to Migrate & Build ballbounce for Android (API 35) – January 2026
+
+This project (a simple Flame + Forge2D ball-bouncing game) was originally built with an older Flutter version. After upgrading Flutter (to 3.38.7), Android Studio, and targeting API 35 for Google Play submission, many breaking changes appeared due to:
+
+- Android Gradle Plugin (AGP) 8+ namespace & manifest rules
+- Legacy Gradle plugin application (`apply from:`)
+- Outdated plugins (sensors_plus, flame_audio → audioplayers, Flame camera API)
+- Kotlin version mismatches
+- Gradle/JDK compatibility
+- Corrupted build intermediates / R8 minification failures
+
+This file documents **every step** taken to get a successful release build (`flutter build appbundle --release`).
+
+## Summary of Major Upgrades & Versions (Final Working State)
+
+- Flutter: 3.38.7 (stable channel)
+- AGP: 8.2.2 (in `android/build.gradle`)
+- Gradle Wrapper: 8.5+
+- Kotlin: 2.2.0
+- Flame: ^1.19.0
+- sensors_plus: ^7.0.0 (required Kotlin 2.2.0 & AGP >=8.12.1 in some cases, but 8.2.2 worked with tweaks)
+- flame_audio: ^2.2.1 (pulls updated audioplayers)
+- minifyEnabled & shrinkResources: **false** (temporary for release build stability)
+
+## Step-by-Step Migration Guide
+
+### 1. Update Flutter & Clean Everything
+```bash
+flutter upgrade
+flutter doctor -v   # Confirm JDK 21 (bundled with recent Android Studio)
+flutter clean
+flutter pub cache repair
+rm -rf build .gradle   # In project root (Windows: rmdir /s /q build .gradle)
+2. Update pubspec.yaml Dependencies
+Upgrade packages that support AGP 8+ and modern Kotlin:
+
+YAML
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.19.0
+  forge2d: ^0.13.0
+  flame_forge2d: ^0.19.0
+  flame_audio: ^2.2.1
+  sensors_plus: ^7.0.0   # Major upgrade – fixes namespace/manifest issues
+  cupertino_icons: ^1.0.8
+  flutter_launcher_icons: ^0.13.1
+Bash
+flutter pub upgrade --major-versions
+flutter pub get
+Note: sensors_plus 7.0.0 requires Kotlin 2.2.0 and modern AGP/Gradle.
+
+3. Migrate Gradle to Declarative Plugins (Remove Legacy apply from:)
+Old way caused "You are applying Flutter's app_plugin_loader Gradle plugin imperatively" error.
+
+Update android/settings.gradle (replace entire content):
+
+groovy
+pluginManagement {
+    def flutterSdkPath = {
+        def properties = new Properties()
+        file("local.properties").withInputStream { properties.load(it) }
+        def flutterSdkPath = properties.getProperty("flutter.sdk")
+        assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+        return flutterSdkPath
+    }()
+
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    id "com.android.application" version "8.2.2" apply false
+    id "org.jetbrains.kotlin.android" version "2.2.0" apply false
+}
+
+include ":app"
+Update android/app/build.gradle:
+
+Remove old apply plugin: and apply from: lines (flutter.gradle, app_plugin_loader)
+Add at top:
+groovy
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+4. Update Project-Level android/build.gradle
+Update Kotlin & AGP, add fallback fixes for plugins:
+
+groovy
+buildscript {
+    ext.kotlin_version = '2.2.0'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.2'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects { repositories { google(); mavenCentral() } }
+
+rootProject.buildDir = '../build'
+subprojects { project.buildDir = "$$   {rootProject.buildDir}/   $${project.name}" }
+
+subprojects {
+    plugins.withId("com.android.library") {
+        android {
+            if (namespace == null || namespace.toString().isEmpty()) {
+                def fallback = project.group?.toString() ?: "com.fallback.${project.name.replace(':', '_')}"
+                namespace fallback
+            }
+        }
+    }
+
+    afterEvaluate { proj ->
+        if (proj.hasProperty('android')) {
+            proj.android {
+                compileOptions {
+                    sourceCompatibility JavaVersion.VERSION_1_8
+                    targetCompatibility JavaVersion.VERSION_1_8
+                }
+            }
+            proj.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                kotlinOptions.jvmTarget = "1.8"
+            }
+        }
+    }
+}
+5. Update App Module android/app/build.gradle
+Add namespace, ensure API 35, fix keystore loading order (must be before signingConfigs):
+
+groovy
+// Keystore loading (MUST be before android {} block)
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace "com.peeweesusername.ballbounce"
+
+    compileSdkVersion 35
+    defaultConfig {
+        applicationId "com.peeweesusername.ballbounce"
+        minSdkVersion flutter.minSdkVersion
+        targetSdkVersion 35
+        // ...
+    }
+
+    signingConfigs {
+        release {
+            keyAlias keystoreProperties['keyAlias']
+            keyPassword keystoreProperties['keyPassword']
+            storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+            storePassword keystoreProperties['storePassword']
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false     // Disabled to avoid R8 corruption errors
+            shrinkResources false
+        }
+    }
+}
+Also remove package="..." from AndroidManifest.xml <manifest> tag.
+
+6. Update Gradle Wrapper for JDK 21 Compatibility
+In android/gradle/wrapper/gradle-wrapper.properties:
+
+text
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-all.zip
+Or run in android/ folder:
+
+Bash
+gradlew wrapper --gradle-version=8.5
+7. Fix Flame Camera API (removed effectiveSize)
+Old code:
+
+Dart
+Vector2 gameSize = screenToWorld(camera.viewport.effectiveSize);
+New (Flame 1.19+):
+
+Dart
+final gameSize = camera.viewfinder.visibleGameSize;
+// No need for screenToWorld on size – already in world coordinates
+final containmentBox = ContainmentBox(gameSize);
+8. Final Aggressive Clean & Build
+Bash
+flutter clean
+flutter pub get
+cd android
+gradlew.bat clean
+cd ..
+rmdir /s /q build   # Delete build folder again if needed
+flutter build appbundle --release
+Final Workaround for R8 base.jar I/O Exception
+The release build kept failing at :app:minifyReleaseWithR8 due to corrupted base.jar in intermediates (common after many upgrades/cleans).
+
+Permanent workaround (used to succeed):
+
+Set minifyEnabled false and shrinkResources false in release buildType
+This produces larger AAB (~2–3x), but Google Play accepts it
+Re-enable minification later once stable (add ProGuard rules if needed)

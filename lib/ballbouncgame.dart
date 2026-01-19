@@ -8,8 +8,9 @@ class BallBounceGame extends Forge2DGame {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    Vector2 gameSize = screenToWorld(camera.viewport.effectiveSize);
-    add(ContainmentBox(gameSize));
+    //Vector2 gameSize = screenToWorld(camera.viewport.effectiveSize);
+    Vector2? gameSize = camera.viewfinder.visibleGameSize;
+    add(ContainmentBox(gameSize!));
     add(BounceyBall(position: Vector2(gameSize.x/2,gameSize.y/3)));
     add(BounceyBall(position: Vector2(gameSize.x/2,2*gameSize.y/3)));
   }
